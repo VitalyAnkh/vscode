@@ -394,7 +394,7 @@ suite('Files - TextFileEditorModelManager', () => {
 			canDispose = await canDisposePromise;
 		})();
 
-		assert.strictEqual(canDispose, false);
+		assert.strictEqual(canDispose, true);
 		model.revert({ soft: true });
 
 		await timeout(0);

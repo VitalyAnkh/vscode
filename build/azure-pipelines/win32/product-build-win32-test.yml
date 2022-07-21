@@ -21,6 +21,13 @@ steps:
       - powershell: |
           . build/azure-pipelines/win32/exec.ps1
           $ErrorActionPreference = "Stop"
+          exec { node test/unit/browser/index.js --sequential --browser chromium --browser firefox --tfs "Browser Unit Tests" }
+        displayName: Run unit tests (Browser, Chromium & Firefox)
+        timeoutInMinutes: 20
+
+      - powershell: |
+          . build/azure-pipelines/win32/exec.ps1
+          $ErrorActionPreference = "Stop"
           exec { yarn electron $(VSCODE_ARCH) }
           exec { .\scripts\test.bat --tfs "Unit Tests" }
         displayName: Run unit tests (Electron)
@@ -32,13 +39,6 @@ steps:
           exec { yarn test-node }
         displayName: Run unit tests (node.js)
         timeoutInMinutes: 15
-
-      - powershell: |
-          . build/azure-pipelines/win32/exec.ps1
-          $ErrorActionPreference = "Stop"
-          exec { node test/unit/browser/index.js --sequential --browser chromium --browser firefox --tfs "Browser Unit Tests" }
-        displayName: Run unit tests (Browser, Chromium & Firefox)
-        timeoutInMinutes: 20
 
     - ${{ if ne(parameters.VSCODE_QUALITY, 'oss') }}:
       - powershell: |
