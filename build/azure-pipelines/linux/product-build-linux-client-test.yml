@@ -43,6 +43,12 @@ steps:
     - ${{ if eq(parameters.VSCODE_QUALITY, 'oss') }}:
       - script: |
           set -e
+          DEBUG=*browser* yarn test-browser-no-install --browser chromium --tfs "Browser Unit Tests"
+        displayName: Run unit tests (Browser, Chromium)
+        timeoutInMinutes: 15
+
+      - script: |
+          set -e
           DISPLAY=:10 ./scripts/test.sh --tfs "Unit Tests"
         displayName: Run unit tests (Electron)
         timeoutInMinutes: 15
@@ -53,13 +59,13 @@ steps:
         displayName: Run unit tests (node.js)
         timeoutInMinutes: 15
 
+    - ${{ if ne(parameters.VSCODE_QUALITY, 'oss') }}:
       - script: |
           set -e
-          DEBUG=*browser* yarn test-browser-no-install --browser chromium --tfs "Browser Unit Tests"
+          DEBUG=*browser* yarn test-browser-no-install --build --browser chromium --tfs "Browser Unit Tests"
         displayName: Run unit tests (Browser, Chromium)
         timeoutInMinutes: 15
 
-    - ${{ if ne(parameters.VSCODE_QUALITY, 'oss') }}:
       - script: |
           set -e
           ./scripts/test.sh --build --tfs "Unit Tests"
@@ -70,12 +76,6 @@ steps:
           set -e
           yarn test-node --build
         displayName: Run unit tests (node.js)
-        timeoutInMinutes: 15
-
-      - script: |
-          set -e
-          DEBUG=*browser* yarn test-browser-no-install --build --browser chromium --tfs "Browser Unit Tests"
-        displayName: Run unit tests (Browser, Chromium)
         timeoutInMinutes: 15
 
   - ${{ if eq(parameters.VSCODE_RUN_INTEGRATION_TESTS, true) }}:
