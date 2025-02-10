@@ -201,6 +201,11 @@ export function assertOneOf<TType, TSubtype extends TType>(
 	);
 }
 
+/**
+ * Compile-time type check of a variable.
+ */
+export function typeCheck<T = never>(_thing: NoInfer<T>): void { }
+
 const hasOwnProperty = Object.prototype.hasOwnProperty;
 
 /**
