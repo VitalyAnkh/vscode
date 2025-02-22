@@ -41,7 +41,7 @@ import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { IModifiedFileEntry, ChatEditKind, WorkingSetEntryState, IModifiedFileEntryEditorIntegration } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
-import { ChatEditingCodeEditorIntegration } from './chatEditingCodeEditorIntegration.js';
+import { ChatEditingCodeEditorIntegration, IDocumentDiff2 } from './chatEditingCodeEditorIntegration.js';
 import { AbstractChatEditingModifiedFileEntry, pendingRewriteMinimap, IModifiedEntryTelemetryInfo, ISnapshotEntry } from './chatEditingModifiedFileEntry.js';
 import { ChatEditingSnapshotTextModelContentProvider, ChatEditingTextModelContentProvider } from './chatEditingTextModelContentProviders.js';
 
@@ -83,11 +83,10 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		return this.doc;
 	}
 
-	private _isFirstEditAfterStartOrSnapshot: boolean = true;
 	private _edit: OffsetEdit = OffsetEdit.empty;
 	private _isEditFromUs: boolean = false;
 	private _allEditsAreFromUs: boolean = true;
-	private _diffOperation: Promise<any> | undefined;
+	private _diffOperation: Promise<IDocumentDiff | undefined> | undefined;
 	private _diffOperationIds: number = 0;
 
 	private readonly _diffInfo = observableValue<IDocumentDiff>(this, nullDocumentDiff);
@@ -183,7 +182,6 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 	}
 
 	createSnapshot(requestId: string | undefined, undoStop: string | undefined): ISnapshotEntry {
-		this._isFirstEditAfterStartOrSnapshot = true;
 		return {
 			resource: this.modifiedURI,
 			languageId: this.modifiedModel.getLanguageId(),
@@ -209,8 +207,11 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 	}
 
 	override async acceptStreamingEditsEnd(tx: ITransaction) {
-		await this._diffOperation;
+		const diff = await this._diffOperation;
 		super.acceptStreamingEditsEnd(tx);
+		if (diff?.identical) {
+			this.accept(tx);
+		}
 	}
 
 	protected override _resetEditsState(tx: ITransaction): void {
@@ -272,18 +273,19 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		}
 	}
 
-	acceptAgentEdits(resource: URI, textEdits: (TextEdit | ICellEditOperation)[], isLastEdits: boolean, responseModel: IChatResponseModel): void {
+	override acceptStreamingEditsStart(responseModel: IChatResponseModel, tx: ITransaction) {
+		super.acceptStreamingEditsStart(responseModel, tx);
+
+		// push stack element whenever streaming starts
+		const request = responseModel.session.getRequests().find(req => req.id === responseModel.requestId);
+		const label = request?.message.text ? localize('chatEditing1', "Chat Edit: '{0}'", request.message.text) : localize('chatEditing2', "Chat Edit");
+		this._undoRedoService.pushElement(new SingleModelEditStackElement(label, 'chat.edit', this.doc, null));
+	}
+
+	async acceptAgentEdits(resource: URI, textEdits: (TextEdit | ICellEditOperation)[], isLastEdits: boolean, responseModel: IChatResponseModel): Promise<void> {
 
 		assertType(textEdits.every(TextEdit.isTextEdit), 'INVALID args, can only handle text edits');
 		assert(isEqual(resource, this.modifiedURI), ' INVALID args, can only edit THIS document');
-
-		// push stack element for the first edit
-		if (this._isFirstEditAfterStartOrSnapshot) {
-			this._isFirstEditAfterStartOrSnapshot = false;
-			const request = this._chatService.getSession(this._telemetryInfo.sessionId)?.getRequests().at(-1);
-			const label = request?.message.text ? localize('chatEditing1', "Chat Edit: '{0}'", request.message.text) : localize('chatEditing2', "Chat Edit");
-			this._undoRedoService.pushElement(new SingleModelEditStackElement(label, 'chat.edit', this.doc, null));
-		}
 
 		const ops = textEdits.map(TextEdit.asEditOperation);
 		const undoEdits = this._applyEdits(ops);
@@ -325,7 +327,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		});
 	}
 
-	async acceptHunk(change: DetailedLineRangeMapping): Promise<boolean> {
+	private async _acceptHunk(change: DetailedLineRangeMapping): Promise<boolean> {
 		if (!this._diffInfo.get().changes.includes(change)) {
 			// diffInfo should have model version ids and check them (instead of the caller doing that)
 			return false;
@@ -343,7 +345,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		return true;
 	}
 
-	async rejectHunk(change: DetailedLineRangeMapping): Promise<boolean> {
+	private async _rejectHunk(change: DetailedLineRangeMapping): Promise<boolean> {
 		if (!this._diffInfo.get().changes.includes(change)) {
 			return false;
 		}
@@ -385,10 +387,10 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		}
 	}
 
-	private async _updateDiffInfo(): Promise<void> {
+	private async _updateDiffInfo(): Promise<IDocumentDiff | undefined> {
 
 		if (this.docSnapshot.isDisposed() || this.doc.isDisposed()) {
-			return;
+			return undefined;
 		}
 
 		const docVersionNow = this.doc.getVersionId();
@@ -404,7 +406,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		);
 
 		if (this.docSnapshot.isDisposed() || this.doc.isDisposed()) {
-			return;
+			return undefined;
 		}
 
 		// only update the diff if the documents didn't change in the meantime
@@ -412,7 +414,9 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			const diff2 = diff ?? nullDocumentDiff;
 			this._diffInfo.set(diff2, undefined);
 			this._edit = OffsetEdits.fromLineRangeMapping(this.docSnapshot, this.doc, diff2.changes);
+			return diff2;
 		}
+		return undefined;
 	}
 
 	protected override async _doAccept(tx: ITransaction | undefined): Promise<void> {
@@ -457,6 +461,17 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 	protected _createEditorIntegration(editor: IEditorPane): IModifiedFileEntryEditorIntegration {
 		const codeEditor = getCodeEditor(editor.getControl());
 		assertType(codeEditor);
-		return this._instantiationService.createInstance(ChatEditingCodeEditorIntegration, codeEditor, this, this._diffInfo);
+
+		const diffInfo = this._diffInfo.map(value => {
+			return {
+				...value,
+				originalModel: this.originalModel,
+				modifiedModel: this.modifiedModel,
+				keep: changes => this._acceptHunk(changes),
+				undo: changes => this._rejectHunk(changes)
+			} satisfies IDocumentDiff2;
+		});
+
+		return this._instantiationService.createInstance(ChatEditingCodeEditorIntegration, this, codeEditor, diffInfo);
 	}
 }
